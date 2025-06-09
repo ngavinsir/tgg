@@ -1,0 +1,4 @@
+.zig-cache
+mise.toml
+.aider*
+zig-out
