@@ -1,9 +1,14 @@
+const std = @import("std");
 const Tui = @import("Tui.zig");
 
 const Text = @This();
+pub const Span = struct {
+    text: []const u8,
+    style: Tui.Style,
+};
 
 has_focus: bool = false,
-text: []const u8,
+spans: []const Span,
 rect: Tui.Rect = .{},
 
 fn get_rect(ctx: *anyopaque) Tui.Rect {
@@ -21,17 +26,31 @@ fn has_focus_fn(ctx: *anyopaque) bool {
     return self.has_focus;
 }
 
-fn focus(ctx: *anyopaque, _: *const fn (a: Tui.App, v: Tui.View) void) void {
+fn focus(ctx: *anyopaque) Tui.View {
     const self: *Text = @ptrCast(@alignCast(ctx));
     self.has_focus = true;
+    return self.view();
+}
+
+fn blur(ctx: *anyopaque) void {
+    const self: *Text = @ptrCast(@alignCast(ctx));
+    self.has_focus = false;
 }
 
 fn draw(ctx: *anyopaque, t: *Tui) !void {
     const self: *Text = @ptrCast(@alignCast(ctx));
 
-    try t.move_cursor(self.rect.x, self.rect.y);
-    try t.anyWriter().writeAll(self.text);
-    try t.anyWriter().writeByteNTimes(' ', t.term_size.width - self.text.len);
+    var x: usize = self.rect.x;
+    var y: usize = self.rect.y;
+    for (self.spans) |span| {
+        try t.set_style(span.style);
+        try t.move_cursor(x, y);
+        try t.anyWriter().writeAll(span.text);
+        try t.anyWriter().writeAll(" ");
+        x += span.text.len + 1;
+        y += 0;
+    }
+    try t.reset_style();
 }
 
 pub fn view(self: *Text) Tui.View {
@@ -41,6 +60,7 @@ pub fn view(self: *Text) Tui.View {
         .set_rect_fn = set_rect,
         .draw_fn = draw,
         .focus_fn = focus,
+        .blur_fn = blur,
         .has_focus_fn = has_focus_fn,
     };
 }

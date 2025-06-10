@@ -6,7 +6,7 @@ const Queue = @import("../Queue.zig").Queue;
 
 const Tui = @This();
 pub const Flex = @import("Flex.zig");
-// pub const Text = @import("Text.zig");
+pub const Text = @import("Text.zig");
 pub const TextInput = @import("TextInput.zig").TextInput;
 
 term_size: Size = undefined,
@@ -97,41 +97,6 @@ fn read_loop(self: *Tui) void {
     }
 }
 
-// pub fn loop(self: *Tui) !void {
-//     while (true) {
-//         try self.render();
-//
-//         var buffer: [1]u8 = undefined;
-//         _ = try self.read(&buffer);
-//
-//         var buf: [64]u8 = undefined;
-//         const bufferHex = try std.fmt.bufPrint(&buf, "0x{x}", .{buffer});
-//         try self.writeLine(bufferHex, 17, self.term_size.width, true);
-//         if (buffer[0] == 'q') {
-//             return;
-//         } else if (buffer[0] == '\x1B') {
-//             self.uncooked_termios.cc[@intFromEnum(posix.V.TIME)] = 1;
-//             self.uncooked_termios.cc[@intFromEnum(posix.V.MIN)] = 0;
-//             try posix.tcsetattr(self.tty, .NOW, self.uncooked_termios);
-//
-//             var esc_buffer: [8]u8 = undefined;
-//             const esc_read = try self.read(&esc_buffer);
-//             const escBufferHex = try std.fmt.bufPrint(&buf, "0x{x}", .{esc_buffer});
-//             try self.writeLine(escBufferHex, 18, self.term_size.width, false);
-//
-//             self.uncooked_termios.cc[@intFromEnum(posix.V.TIME)] = 0;
-//             self.uncooked_termios.cc[@intFromEnum(posix.V.MIN)] = 1;
-//             try posix.tcsetattr(self.tty, .NOW, self.uncooked_termios);
-//
-//             if (mem.eql(u8, esc_buffer[0..esc_read], "[A")) {
-//                 self.i -|= 1;
-//             } else if (mem.eql(u8, esc_buffer[0..esc_read], "[B")) {
-//                 self.i = @min(self.i + 1, 15);
-//             }
-//         }
-//     }
-// }
-
 pub fn opaque_write(ptr: *const anyopaque, bytes: []const u8) !usize {
     const self: *const Tui = @ptrCast(@alignCast(ptr));
     return posix.write(self.tty, bytes);
@@ -176,12 +141,34 @@ fn show_cursor(self: Tui) !void {
     try self.anyWriter().writeAll("\x1B[?25h");
 }
 
-fn attribute_reset(self: Tui) !void {
+pub fn reset_style(self: Tui) !void {
     try self.anyWriter().writeAll("\x1B[0m");
 }
 
-fn blueBackground(self: Tui) !void {
-    try self.anyWriter().writeAll("\x1B[44m");
+pub fn set_style(self: Tui, style: Style) !void {
+    var buf: [32]u8 = undefined;
+    const mode_query = try std.fmt.bufPrint(&buf, "\x1B[{}m", .{style.mode});
+    const bg_query = try std.fmt.bufPrint(
+        &buf,
+        "\x1B[48;2;{};{};{}m",
+        .{
+            style.bg_color.r,
+            style.bg_color.g,
+            style.bg_color.b,
+        },
+    );
+    const fg_query = try std.fmt.bufPrint(
+        &buf,
+        "\x1B[38;2;{};{};{}m",
+        .{
+            style.fg_color.r,
+            style.fg_color.g,
+            style.fg_color.b,
+        },
+    );
+    try self.anyWriter().writeAll(mode_query);
+    try self.anyWriter().writeAll(bg_query);
+    try self.anyWriter().writeAll(fg_query);
 }
 
 fn clear(self: Tui) !void {
@@ -190,38 +177,6 @@ fn clear(self: Tui) !void {
 
 fn handleSigWinch(_: c_int) callconv(.C) void {
     tui.term_size = tui.getSize() catch return;
-}
-
-// fn render(self: Tui) !void {
-//     try self.writeLine("foo", 0, self.term_size.width, self.i == 0);
-//     try self.writeLine("bar", 1, self.term_size.width, self.i == 1);
-//     try self.writeLine("baz", 2, self.term_size.width, self.i == 2);
-//     try self.writeLine("xyzzy", 3, self.term_size.width, self.i == 3);
-//     try self.writeLine("foo", 4, self.term_size.width, self.i == 4);
-//     try self.writeLine("bar", 5, self.term_size.width, self.i == 5);
-//     try self.writeLine("baz", 6, self.term_size.width, self.i == 6);
-//     try self.writeLine("xyzzy", 7, self.term_size.width, self.i == 7);
-//     try self.writeLine("foo", 8, self.term_size.width, self.i == 8);
-//     try self.writeLine("bar", 9, self.term_size.width, self.i == 9);
-//     try self.writeLine("baz", 10, self.term_size.width, self.i == 10);
-//     try self.writeLine("xyzzy", 11, self.term_size.width, self.i == 11);
-//     try self.writeLine("foo", 12, self.term_size.width, self.i == 12);
-//     try self.writeLine("bar", 13, self.term_size.width, self.i == 13);
-//     try self.writeLine("baz", 14, self.term_size.width, self.i == 14);
-//     try self.writeLine("xyzzy", 15, self.term_size.width, self.i == 15);
-// }
-
-fn writeLine(self: Tui, txt: []const u8, y: usize, width: usize, selected: bool) !void {
-    if (selected) {
-        try self.blueBackground();
-    } else {
-        try self.attribute_reset();
-    }
-    try self.show_cursor();
-    try self.move_cursor(0, y);
-    // try hideCursor(writer);
-    try self.anyWriter().writeAll(txt);
-    try self.anyWriter().writeByteNTimes(' ', width - txt.len);
 }
 
 fn uncook(self: *Tui) !void {
@@ -263,7 +218,7 @@ fn cook(self: Tui) !void {
     try self.clear();
     try self.leave_alt();
     try self.show_cursor();
-    try self.attribute_reset();
+    try self.reset_style();
     try posix.tcsetattr(self.tty, .FLUSH, self.cooked_termios);
 }
 
@@ -280,6 +235,18 @@ fn getSize(self: Tui) !Size {
         .width = @intCast(win_size.col),
     };
 }
+
+pub const Color = struct {
+    r: u8,
+    g: u8,
+    b: u8,
+};
+
+pub const Style = struct {
+    bg_color: Color,
+    fg_color: Color,
+    mode: u4 = 0,
+};
 
 pub const Key = union(enum) {
     backspace,
@@ -366,6 +333,8 @@ pub const App = struct {
 
     pub fn run(self: *App) !void {
         self.focus(self.root);
+        try self.root.draw(&tui);
+
         while (true) {
             if (tui.poll_key()) |k| {
                 switch (k) {
@@ -379,3 +348,19 @@ pub const App = struct {
         }
     }
 };
+
+pub fn color_from_hex(hex: []const u8) !Color {
+    if (hex.len != 7 or hex[0] != '#') {
+        return error.InvalidRGBHexError;
+    }
+
+    const r = try std.fmt.parseInt(u8, hex[1..3], 16);
+    const g = try std.fmt.parseInt(u8, hex[3..5], 16);
+    const b = try std.fmt.parseInt(u8, hex[5..7], 16);
+
+    return .{
+        .r = r,
+        .g = g,
+        .b = b,
+    };
+}
