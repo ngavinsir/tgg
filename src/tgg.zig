@@ -4,10 +4,13 @@ const Tgg = @This();
 
 var rect: Tui.Rect = .{};
 var paragraph = [_][]const u8{ "new", "group", "but", "number", "still", "first", "at", "he", "much", "little" };
+var spans: [128]Tui.Text.Span = undefined;
+var word_states: [128]WordState = undefined;
+var cursor: u7 = 0;
+
+var text: Tui.Text = .{ .spans = &.{} };
 var text_input: Tui.TextInput(32) = .{};
 var separator: Tui.Text = .{ .spans = &.{} };
-var text_spans: [128]Tui.Text.Span = undefined;
-var text: Tui.Text = .{ .spans = &.{} };
 var flex: Tui.Flex = .{
     .direction = .Row,
     .items = &.{
@@ -15,24 +18,66 @@ var flex: Tui.Flex = .{
         separator.view(),
         text_input.view(),
     },
+    .focused_item_index = 2,
     .rect = .{
         .height = 3,
         .width = 50,
     },
 };
 
+const WordState = enum {
+    upcoming,
+    pending,
+    correct,
+    wrong,
+};
+
+const upcoming_style = Tui.Style{
+    .bg_color = Tui.color_from_hex("#292e42"),
+    .fg_color = Tui.color_from_hex("#a9b1d6"),
+};
+const pending_style = Tui.Style{
+    .bg_color = Tui.color_from_hex("#292e42"),
+    .fg_color = Tui.color_from_hex("#bb9af7"),
+};
+const correct_style = Tui.Style{
+    .bg_color = Tui.color_from_hex("#292e42"),
+    .fg_color = Tui.color_from_hex("#9ece6a"),
+};
+const wrong_style = Tui.Style{
+    .bg_color = Tui.color_from_hex("#292e42"),
+    .fg_color = Tui.color_from_hex("#f7768e"),
+};
+
 pub fn init() !void {
-    const style = Tui.Style{
-        .bg_color = try Tui.color_from_hex("#292e42"),
-        .fg_color = try Tui.color_from_hex("#a9b1d6"),
-    };
+    cursor = 0;
+    text_input.clear();
     for (paragraph, 0..) |word, i| {
-        text_spans[i] = Tui.Text.Span{
+        if (i == 0) {
+            word_states[i] = WordState.pending;
+            spans[i] = Tui.Text.Span{
+                .text = word,
+                .style = pending_style,
+            };
+            continue;
+        }
+        word_states[i] = WordState.upcoming;
+        spans[i] = Tui.Text.Span{
             .text = word,
-            .style = style,
+            .style = upcoming_style,
         };
     }
-    text.spans = text_spans[0..paragraph.len];
+    text.spans = spans[0..paragraph.len];
+}
+
+fn update_word_state(i: usize, state: WordState) void {
+    word_states[i] = state;
+    spans[i].style = switch (state) {
+        .correct => correct_style,
+        .wrong => wrong_style,
+        .pending => pending_style,
+        .upcoming => upcoming_style,
+    };
 }
 
 fn draw(ctx: *anyopaque, t: *Tui) !void {
@@ -44,11 +89,31 @@ fn draw(ctx: *anyopaque, t: *Tui) !void {
 fn handle_key(ctx: *anyopaque, k: Tui.Key) !void {
     _ = ctx;
     switch (k) {
+        .esc => try init(),
         .char => |c| {
-            try flex.view().handle_key(k);
-            if (c == 0x20) {
-                @panic(&text_input.text);
+            if (c == 0x20) { // space
+                const inputted_text = text_input.text[0..text_input.text_len];
+
+                // if there is still upcoming words
+                if (cursor < paragraph.len) {
+                    const expected_text = paragraph[cursor];
+                    const is_correct = std.mem.eql(u8, expected_text, inputted_text);
+                    const new_state = if (is_correct) WordState.correct else WordState.wrong;
+                    update_word_state(cursor, new_state);
+                    cursor += 1;
+                    if (cursor < paragraph.len - 1) {
+                        update_word_state(cursor, WordState.pending);
+                    }
+                }
+
+                // clear text input
+                @memset(&text_input.text, 0);
+                text_input.cursor = 0;
+                text_input.text_len = 0;
+                return;
             }
+
+            try flex.view().handle_key(k);
         },
         else => try flex.view().handle_key(k),
     }

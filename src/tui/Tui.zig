@@ -90,6 +90,8 @@ fn read_loop(self: *Tui) void {
                         self.queue.try_push(Key.arrow_left);
                     } else if (std.mem.eql(u8, &keyBuf, "\x1B[C")) {
                         self.queue.try_push(Key.arrow_right);
+                    } else if (keyBuf[0] == 0x1B) {
+                        self.queue.try_push(Key.esc);
                     }
                 },
             }
@@ -254,6 +256,7 @@ pub const Key = union(enum) {
     ctrl_c,
     arrow_left,
     arrow_right,
+    esc,
     char: u8,
 };
 
@@ -333,7 +336,9 @@ pub const App = struct {
 
     pub fn run(self: *App) !void {
         self.focus(self.root);
+        try tui.hide_cursor();
         try self.root.draw(&tui);
+        try tui.show_cursor();
 
         while (true) {
             if (tui.poll_key()) |k| {
@@ -343,20 +348,22 @@ pub const App = struct {
                     else => try self.root.handle_key(k),
                 }
 
+                try tui.hide_cursor();
                 try self.root.draw(&tui);
+                try tui.show_cursor();
             }
         }
     }
 };
 
-pub fn color_from_hex(hex: []const u8) !Color {
+pub fn color_from_hex(hex: []const u8) Color {
     if (hex.len != 7 or hex[0] != '#') {
-        return error.InvalidRGBHexError;
+        @panic("invalid rgb hex");
     }
 
-    const r = try std.fmt.parseInt(u8, hex[1..3], 16);
-    const g = try std.fmt.parseInt(u8, hex[3..5], 16);
-    const b = try std.fmt.parseInt(u8, hex[5..7], 16);
+    const r = std.fmt.parseInt(u8, hex[1..3], 16) catch unreachable;
+    const g = std.fmt.parseInt(u8, hex[3..5], 16) catch unreachable;
+    const b = std.fmt.parseInt(u8, hex[5..7], 16) catch unreachable;
 
     return .{
         .r = r,

@@ -11,6 +11,12 @@ pub fn TextInput(comptime max_text_len: u8) type {
 
         const Self = @This();
 
+        pub fn clear(self: *Self) void {
+            @memset(&self.text, 0);
+            self.cursor = 0;
+            self.text_len = 0;
+        }
+
         fn get_rect(ctx: *anyopaque) Tui.Rect {
             const self: *Self = @ptrCast(@alignCast(ctx));
             return self.rect;

@@ -9,6 +9,7 @@ pub const Direction = enum {
 
 direction: Direction,
 items: []const Tui.View,
+focused_item_index: ?usize = null,
 rect: Tui.Rect = .{},
 
 fn get_rect(ctx: *anyopaque) Tui.Rect {
@@ -24,30 +25,20 @@ fn set_rect(ctx: *anyopaque, rect: Tui.Rect) void {
 fn has_focus(ctx: *anyopaque) bool {
     const self: *Flex = @ptrCast(@alignCast(ctx));
 
-    for (self.items) |i| {
-        if (i.has_focus()) {
-            return true;
-        }
-    }
-    return false;
+    return self.focused_item_index != null;
 }
 
 fn focus(ctx: *anyopaque) Tui.View {
     const self: *Flex = @ptrCast(@alignCast(ctx));
 
-    const item_count = self.items.len;
-    if (item_count == 0) return self.view();
+    if (self.focused_item_index) |i| {
+        const item_count = self.items.len;
+        if (i >= item_count) return self.view();
 
-    const new_focused_item = switch (has_focus(self)) {
-        false => 0,
-        true => blk: {
-            for (self.items, 0..) |item, i| {
-                if (item.has_focus()) break :blk (i + 1) % item_count;
-            }
-            break :blk 0;
-        },
-    };
-    return self.items[new_focused_item].focus();
+        return self.items[i].focus();
+    } else {
+        return self.view();
+    }
 }
 
 fn blur(_: *anyopaque) void {}
