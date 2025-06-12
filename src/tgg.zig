@@ -1,11 +1,12 @@
 const std = @import("std");
 const Tui = @import("./tui/Tui.zig");
+const p = @import("paragraph.zig");
 const Tgg = @This();
 
 var rect: Tui.Rect = .{};
 var result_text_buff: [32]u8 = undefined;
 var result_span: [1]Tui.Text.Span = .{.{ .text = &.{}, .style = upcoming_style }};
-var paragraph = [_][]const u8{ "new", "group", "but", "number", "still", "first", "at", "he", "much", "little" };
+var paragraph: [][]const u8 = &[_][]const u8{};
 var spans: [128]Tui.Text.Span = undefined;
 var word_states: [128]WordState = undefined;
 var cursor: u7 = 0;
@@ -57,8 +58,7 @@ const wrong_style = Tui.Style{
 };
 
 pub fn init() !void {
-    wpm = null;
-    acc = null;
+    paragraph = p.get_paragraph(10);
     cursor = 0;
     text_input.clear();
     for (paragraph, 0..) |word, i| {
@@ -86,7 +86,15 @@ fn update_result_text() !void {
         var buf: [8]u8 = undefined;
         wpm_text = try std.fmt.bufPrint(&buf, "{}", .{w});
     }
-    result_span[0].text = try std.fmt.bufPrint(&result_text_buff, "wpm: {s}", .{wpm_text});
+    var acc_text: []const u8 = "xx";
+    if (acc) |a| {
+        var buf: [8]u8 = undefined;
+        acc_text = try std.fmt.bufPrint(&buf, "{}", .{a});
+    }
+    result_span[0].text = try std.fmt.bufPrint(&result_text_buff, "wpm: {s} / acc: {s}", .{
+        wpm_text,
+        acc_text,
+    });
     result_text.spans = &result_span;
 }
 
@@ -114,6 +122,19 @@ fn update_pending_word(new_state: WordState) void {
     }
 }
 
+fn get_total_chars() f64 {
+    var res: u16 = 0;
+    for (paragraph, 0..) |word, i| {
+        const is_last = i == paragraph.len - 1;
+        res += @intCast(word.len);
+        if (!is_last) {
+            res += 1; // space character
+        }
+    }
+
+    return @floatFromInt(res);
+}
+
 fn get_total_correct_chars() f64 {
     var res: u16 = 0;
     for (word_states, 0..) |word_state, i| {
@@ -137,8 +158,9 @@ fn calculate_result() !void {
     std.debug.assert(timer != null);
     const elapsed_ns: f64 = @floatFromInt(timer.?.lap());
     const ns_per_min: f64 = @floatFromInt(std.time.ns_per_min);
-    const min = elapsed_ns / ns_per_min;
-    wpm = @intFromFloat(get_total_correct_chars() / 5 / min);
+    const elapsed_min = elapsed_ns / ns_per_min;
+    wpm = @intFromFloat(get_total_correct_chars() / 5 / elapsed_min);
+    acc = @intFromFloat(get_total_correct_chars() / get_total_chars() * 100);
     try update_result_text();
 }
 
