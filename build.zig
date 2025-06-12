@@ -1,6 +1,11 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+const targets: []const std.Target.Query = &.{
+    .{ .cpu_arch = .aarch64, .os_tag = .macos },
+    .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
+};
+
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -14,8 +19,6 @@ pub fn build(b: *std.Build) void {
         .name = "tgg",
         .root_module = exe_mod,
     });
-
-    b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
 
@@ -36,4 +39,24 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+
+    const all_step = b.step("all", "Build for all targets");
+    for (targets) |t| {
+        const t_exe = b.addExecutable(.{
+            .name = "tgg",
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.resolveTargetQuery(t),
+            .optimize = .ReleaseSafe,
+        });
+
+        const target_output = b.addInstallArtifact(t_exe, .{
+            .dest_dir = .{
+                .override = .{
+                    .custom = try t.zigTriple(b.allocator),
+                },
+            },
+        });
+
+        all_step.dependOn(&target_output.step);
+    }
 }
