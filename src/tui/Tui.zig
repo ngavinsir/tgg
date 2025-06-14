@@ -14,7 +14,7 @@ cooked_termios: posix.termios = undefined,
 uncooked_termios: posix.termios = undefined,
 tty: posix.fd_t = undefined,
 thread: ?std.Thread = null,
-queue: Queue(Key, 512) = .{},
+queue: Queue(Key, 16) = .{},
 is_reading: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 
 var initialized = false;
@@ -43,6 +43,9 @@ pub fn init() !Tui {
 }
 
 pub fn deinit(self: *Tui) void {
+    // trigger a read to stop the reading thread
+    self.anyWriter().writeAll("\x1B[5n") catch {};
+
     if (self.thread) |t| {
         self.is_reading.store(false, .seq_cst);
         t.join();
@@ -74,27 +77,27 @@ pub fn poll_key(self: *Tui) ?Key {
 fn read_loop(self: *Tui) void {
     while (self.is_reading.load(.seq_cst)) {
         var keyBuf: [3]u8 = undefined;
-        if (self.poll_tty(keyBuf[0..]) catch continue) {
-            switch (keyBuf[0]) {
-                '\x03' => self.queue.try_push(Key.ctrl_c),
-                '\x09' => self.queue.try_push(Key.tab),
+        if (!(self.poll_tty(keyBuf[0..]) catch continue)) continue;
 
-                // alphanumerics and special chars
-                '\x20'...'\x7e' => self.queue.try_push(.{ .char = keyBuf[0] }),
+        switch (keyBuf[0]) {
+            '\x03' => self.queue.try_push(Key.ctrl_c),
+            '\x09' => self.queue.try_push(Key.tab),
 
-                // backspace or delete
-                '\x08', '\x7f' => self.queue.try_push(Key.backspace),
+            // alphanumerics and special chars
+            '\x20'...'\x7e' => self.queue.try_push(.{ .char = keyBuf[0] }),
 
-                else => {
-                    if (std.mem.eql(u8, &keyBuf, "\x1B[D")) {
-                        self.queue.try_push(Key.arrow_left);
-                    } else if (std.mem.eql(u8, &keyBuf, "\x1B[C")) {
-                        self.queue.try_push(Key.arrow_right);
-                    } else if (keyBuf[0] == 0x1B) {
-                        self.queue.try_push(Key.esc);
-                    }
-                },
-            }
+            // backspace or delete
+            '\x08', '\x7f' => self.queue.try_push(Key.backspace),
+
+            else => {
+                if (std.mem.eql(u8, &keyBuf, "\x1B[D")) {
+                    self.queue.try_push(Key.arrow_left);
+                } else if (std.mem.eql(u8, &keyBuf, "\x1B[C")) {
+                    self.queue.try_push(Key.arrow_right);
+                } else if (keyBuf[0] == 0x1B) {
+                    self.queue.try_push(Key.esc);
+                }
+            },
         }
     }
 }
@@ -207,8 +210,8 @@ fn uncook(self: *Tui) !void {
     self.uncooked_termios.cflag.CSIZE = .CS8;
     self.uncooked_termios.cflag.PARENB = false;
 
-    self.uncooked_termios.cc[@intFromEnum(posix.V.TIME)] = 1;
-    self.uncooked_termios.cc[@intFromEnum(posix.V.MIN)] = 0;
+    self.uncooked_termios.cc[@intFromEnum(posix.V.TIME)] = 0;
+    self.uncooked_termios.cc[@intFromEnum(posix.V.MIN)] = 1;
     try posix.tcsetattr(self.tty, .FLUSH, self.uncooked_termios);
 
     // try self.hideCursor();
