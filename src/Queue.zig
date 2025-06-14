@@ -11,6 +11,7 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
         push_index: usize = 0,
         pop_index: usize = 0,
         mutex: std.Thread.Mutex = .{},
+        cond: std.Thread.Condition = .{},
 
         const Self = @This();
         const mod_mask = len - 1;
@@ -51,6 +52,8 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
 
             self.q[self.push_index & mod_mask] = x;
             self.push_index += 1;
+
+            self.cond.signal();
         }
 
         pub fn try_push(self: *Self, x: T) void {
@@ -63,8 +66,8 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            if (self._is_empty()) {
-                return null;
+            while (self._is_empty()) {
+                self.cond.wait(&self.mutex);
             }
 
             const x = self.q[self.pop_index & mod_mask];
