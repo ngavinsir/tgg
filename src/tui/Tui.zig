@@ -76,7 +76,7 @@ pub fn poll_key(self: *Tui) ?Key {
 
 fn read_loop(self: *Tui) void {
     while (self.is_reading.load(.seq_cst)) {
-        var keyBuf: [3]u8 = undefined;
+        var keyBuf: [3]u8 = .{0} ** 3;
         if (!(self.poll_tty(keyBuf[0..]) catch continue)) continue;
 
         switch (keyBuf[0]) {
@@ -94,7 +94,7 @@ fn read_loop(self: *Tui) void {
                     self.queue.try_push(Key.arrow_left);
                 } else if (std.mem.eql(u8, &keyBuf, "\x1B[C")) {
                     self.queue.try_push(Key.arrow_right);
-                } else if (keyBuf[0] == 0x1B) {
+                } else if (std.mem.eql(u8, &keyBuf, &.{ 0x1B, 0, 0 })) {
                     self.queue.try_push(Key.esc);
                 }
             },
@@ -152,7 +152,10 @@ pub fn reset_style(self: Tui) !void {
 
 pub fn set_style(self: Tui, style: Style) !void {
     var buf: [32]u8 = undefined;
+
     const mode_query = try std.fmt.bufPrint(&buf, "\x1B[{}m", .{style.mode});
+    try self.anyWriter().writeAll(mode_query);
+
     const bg_query = try std.fmt.bufPrint(
         &buf,
         "\x1B[48;2;{};{};{}m",
@@ -162,6 +165,8 @@ pub fn set_style(self: Tui, style: Style) !void {
             style.bg_color.b,
         },
     );
+    try self.anyWriter().writeAll(bg_query);
+
     const fg_query = try std.fmt.bufPrint(
         &buf,
         "\x1B[38;2;{};{};{}m",
@@ -171,8 +176,6 @@ pub fn set_style(self: Tui, style: Style) !void {
             style.fg_color.b,
         },
     );
-    try self.anyWriter().writeAll(mode_query);
-    try self.anyWriter().writeAll(bg_query);
     try self.anyWriter().writeAll(fg_query);
 }
 
@@ -182,6 +185,8 @@ fn clear(self: Tui) !void {
 
 fn handleSigWinch(_: c_int) callconv(.C) void {
     tui.term_size = tui.getSize() catch return;
+    // trigger a read to redraw
+    tui.anyWriter().writeAll("\x1B[5n") catch {};
 }
 
 fn uncook(self: *Tui) !void {
@@ -245,12 +250,23 @@ pub const Color = struct {
     r: u8,
     g: u8,
     b: u8,
+
+    pub fn eql(self: Color, other: Color) bool {
+        return self.r == other.r and self.g == other.g and self.b == other.b;
+    }
 };
 
 pub const Style = struct {
     bg_color: Color,
     fg_color: Color,
     mode: u4 = 0,
+
+    pub fn eql(self: Style, other: ?Style) bool {
+        if (other) |o| {
+            return self.bg_color.eql(o.bg_color) and self.fg_color.eql(o.fg_color) and self.mode == o.mode;
+        }
+        return false;
+    }
 };
 
 pub const Key = union(enum) {
@@ -274,7 +290,7 @@ pub const View = struct {
     ctx: *anyopaque,
     get_rect_fn: *const fn (ctx: *anyopaque) Rect,
     set_rect_fn: *const fn (ctx: *anyopaque, r: Rect) void,
-    draw_fn: *const fn (ctx: *anyopaque, t: *Tui) anyerror!void,
+    draw_fn: *const fn (ctx: *anyopaque, screen: *Screen) anyerror!void,
     handle_key_fn: ?*const fn (ctx: *anyopaque, k: Key) anyerror!void = null,
     focus_fn: *const fn (ctx: *anyopaque) View,
     blur_fn: *const fn (ctx: *anyopaque) void,
@@ -288,8 +304,8 @@ pub const View = struct {
         self.set_rect_fn(self.ctx, r);
     }
 
-    pub fn draw(self: View, t: *Tui) !void {
-        try self.draw_fn(self.ctx, t);
+    pub fn draw(self: View, screen: *Screen) !void {
+        try self.draw_fn(self.ctx, screen);
     }
 
     pub fn handle_key(self: View, k: Key) !void {
@@ -311,9 +327,110 @@ pub const View = struct {
     }
 };
 
+pub const Cell = struct {
+    style: ?Style,
+    char: u8,
+
+    pub fn eql(self: Cell, other: Cell) bool {
+        const same_char = self.char == other.char;
+        const same_style = if (self.style) |s| s.eql(other.style) else other.style == null;
+        return same_char and same_style;
+    }
+};
+
+pub const Screen = struct {
+    buffer: [128 * 4][128 * 4]?Cell = undefined,
+    size: Size,
+
+    // pub fn init(size: Size) Screen {
+    //     const Row = [128 * 16]?Cell;
+    //     var outer: [128 * 16]Row = undefined;
+    //
+    //     for (&outer) |*row| {
+    //         row.* = [_]?Cell{null} ** 128 * 16;
+    //     }
+    //
+    //     return .{
+    //         .buffer = outer,
+    //         .size = size,
+    //     };
+    // }
+
+    pub fn move_cursor(_: *const Screen, x: usize, y: usize) !void {
+        try tui.move_cursor(x, y);
+    }
+
+    pub fn draw(self: *Screen, x: usize, y: usize, text: []const u8, style: ?Style) void {
+        for (text, 0..) |char, i| {
+            const prev = self.buffer[y][x + i];
+            const s = if (style) |cur_style| cur_style else blk: {
+                if (prev) |p| {
+                    break :blk p.style;
+                }
+                break :blk null;
+            };
+            self.buffer[y][x + i] = .{ .style = s, .char = char };
+        }
+    }
+
+    pub fn drawNTimes(self: *Screen, x: usize, y: usize, text: []const u8, style: ?Style, n: usize) void {
+        var count: usize = 0;
+        while (count < n) : (count += 1) {
+            self.draw(x + (text.len * count), y, text, style);
+        }
+    }
+
+    fn draw_into_tui(self: *const Screen, prev: ?*const Screen) !void {
+        var need_to_move_cursor = true;
+        var last_style: ?Style = null;
+        for (self.buffer[0..tui.term_size.height], 0..) |row, y| {
+            for (row[0..tui.term_size.width], 0..) |cell, x| {
+                const c = cell orelse {
+                    need_to_move_cursor = true;
+                    continue;
+                };
+
+                const style = if (c.style) |s| s else blk: {
+                    if (prev) |p| {
+                        if (p.buffer[y][x]) |pp| {
+                            break :blk pp.style;
+                        }
+                    }
+                    break :blk null;
+                };
+                const style_has_changed = if (last_style) |s| !s.eql(style) else true;
+
+                const has_changed = if (prev) |p|
+                    if (p.buffer[y][x]) |pp| !pp.eql(c) else true
+                else
+                    true;
+
+                if (has_changed) {
+                    if (need_to_move_cursor) try tui.move_cursor(x, y);
+                    if (style_has_changed) {
+                        if (style) |s| {
+                            try tui.reset_style();
+                            try tui.set_style(s);
+                        } else {
+                            try tui.reset_style();
+                        }
+                        last_style = c.style;
+                    }
+                    try tui.anyWriter().writeByte(c.char);
+                    need_to_move_cursor = false;
+                } else {
+                    need_to_move_cursor = true;
+                }
+            }
+        }
+    }
+};
+
 pub const App = struct {
     root: View,
     cur_focused: ?View = null,
+    last_screen: ?*Screen = null,
+    cur_screen: Screen = undefined,
 
     pub fn init(root: View) !App {
         _ = try Tui.init();
@@ -337,23 +454,29 @@ pub const App = struct {
         self.cur_focused = new_focused;
     }
 
+    fn draw(self: *App) !void {
+        try tui.hide_cursor();
+
+        self.cur_screen = .{ .size = tui.term_size };
+        try self.root.draw(&self.cur_screen);
+        try self.cur_screen.draw_into_tui(self.last_screen);
+        self.last_screen = &self.cur_screen;
+
+        try tui.show_cursor();
+    }
+
     pub fn run(self: *App) !void {
         self.focus(self.root);
-        try tui.hide_cursor();
-        try self.root.draw(&tui);
-        try tui.show_cursor();
+        try self.draw();
 
         while (true) {
             if (tui.poll_key()) |k| {
                 switch (k) {
                     .ctrl_c => return,
-                    .tab => _ = self.focus(self.root),
                     else => try self.root.handle_key(k),
                 }
 
-                try tui.hide_cursor();
-                try self.root.draw(&tui);
-                try tui.show_cursor();
+                try self.draw();
             }
         }
     }

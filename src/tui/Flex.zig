@@ -1,3 +1,4 @@
+const std = @import("std");
 const Tui = @import("Tui.zig");
 
 pub const Flex = @This();
@@ -43,7 +44,7 @@ fn focus(ctx: *anyopaque) Tui.View {
 
 fn blur(_: *anyopaque) void {}
 
-fn draw(ctx: *anyopaque, t: *Tui) !void {
+fn draw(ctx: *anyopaque, screen: *Tui.Screen) !void {
     const self: *Flex = @ptrCast(@alignCast(ctx));
 
     const item_count: u16 = @intCast(self.items.len);
@@ -66,11 +67,12 @@ fn draw(ctx: *anyopaque, t: *Tui) !void {
     var x = self.rect.x;
     var y = self.rect.y;
     for (self.items) |item| {
+        std.debug.print("y: {any}\n", .{y});
         item.set_rect(.{ .x = x, .y = y, .width = item_width, .height = item_height });
 
         // draw focused item last
         if (!item.has_focus()) {
-            try item.draw(t);
+            try item.draw(screen);
         }
 
         switch (self.direction) {
@@ -80,7 +82,7 @@ fn draw(ctx: *anyopaque, t: *Tui) !void {
     }
     for (self.items) |item| {
         if (item.has_focus()) {
-            try item.draw(t);
+            try item.draw(screen);
             return;
         }
     }

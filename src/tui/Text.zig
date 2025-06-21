@@ -37,23 +37,22 @@ fn blur(ctx: *anyopaque) void {
     self.has_focus = false;
 }
 
-fn draw(ctx: *anyopaque, t: *Tui) !void {
+fn draw(ctx: *anyopaque, screen: *Tui.Screen) !void {
     const self: *Text = @ptrCast(@alignCast(ctx));
+
+    if (self.spans.len == 0) return;
 
     var x: usize = self.rect.x;
     var y: usize = self.rect.y;
     for (self.spans) |span| {
-        try t.set_style(span.style);
-        try t.move_cursor(x, y);
-        try t.anyWriter().writeAll(span.text);
-        try t.anyWriter().writeAll(" ");
+        screen.draw(x, y, span.text, span.style);
+        screen.draw(span.text.len, y, " ", span.style);
         x += span.text.len + 1;
         y += 0;
     }
-    if (x < t.term_size.width) {
-        try t.anyWriter().writeByteNTimes(' ', t.term_size.width - x + 1);
+    if (x < screen.size.width) {
+        screen.drawNTimes(x, y, " ", null, screen.size.width - x + 1);
     }
-    try t.reset_style();
 }
 
 pub fn view(self: *Text) Tui.View {

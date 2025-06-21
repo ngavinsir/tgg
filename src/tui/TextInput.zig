@@ -8,6 +8,7 @@ pub fn TextInput(comptime max_text_len: u8) type {
         text_len: u8 = 0,
         rect: Tui.Rect = .{},
         cursor: u8 = 0,
+        style: Tui.Style,
 
         const Self = @This();
 
@@ -43,13 +44,12 @@ pub fn TextInput(comptime max_text_len: u8) type {
             self.has_focus = false;
         }
 
-        fn draw(ctx: *anyopaque, tui: *Tui) !void {
+        fn draw(ctx: *anyopaque, screen: *Tui.Screen) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
 
-            try tui.move_cursor(self.rect.x, self.rect.y);
-            try tui.anyWriter().writeAll(&self.text);
-            try tui.anyWriter().writeByteNTimes(' ', tui.term_size.width - self.text.len);
-            try tui.move_cursor(self.cursor, self.rect.y);
+            screen.draw(self.rect.x, self.rect.y, &self.text, self.style);
+            screen.drawNTimes(self.rect.x + self.text.len, self.rect.y, " ", null, screen.size.width - self.text.len);
+            try screen.move_cursor(self.cursor, self.rect.y);
         }
 
         fn handle_key(ctx: *anyopaque, k: Tui.Key) !void {

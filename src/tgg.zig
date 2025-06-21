@@ -16,19 +16,26 @@ var acc: ?u9 = null;
 
 var result_text: Tui.Text = .{ .spans = &.{} };
 var paragraph_text: Tui.Text = .{ .spans = &.{} };
-var text_input: Tui.TextInput(32) = .{};
+var text_input: Tui.TextInput(32) = .{ .style = upcoming_style };
 var separator: Tui.Text = .{ .spans = &.{} };
+var guide_space_text: Tui.Text = .{ .spans = &.{Tui.Text.Span{ .text = "space - to submit word", .style = warning_style }} };
+var esc_space_text: Tui.Text = .{ .spans = &.{Tui.Text.Span{ .text = "esc - to reset paragraph", .style = warning_style }} };
 var root: Tui.Flex = .{
     .direction = .Row,
     .items = &.{
         result_text.view(),
         paragraph_text.view(),
-        separator.view(),
-        text_input.view(),
+        // separator.view(),
+        // text_input.view(),
+        // separator.view(),
+        // separator.view(),
+        // guide_space_text.view(),
+        // esc_space_text.view(),
     },
     .focused_item_index = 3,
     .rect = .{
-        .height = 4,
+        // .height = 8,
+        .height = 2,
         .width = 50,
     },
 };
@@ -41,20 +48,25 @@ const WordState = enum {
 };
 
 const upcoming_style = Tui.Style{
-    .bg_color = Tui.color_from_hex("#292e42"),
+    .bg_color = Tui.color_from_hex("#1a1b26"),
     .fg_color = Tui.color_from_hex("#a9b1d6"),
 };
 const pending_style = Tui.Style{
-    .bg_color = Tui.color_from_hex("#292e42"),
+    .bg_color = Tui.color_from_hex("#1a1b26"),
     .fg_color = Tui.color_from_hex("#bb9af7"),
 };
 const correct_style = Tui.Style{
-    .bg_color = Tui.color_from_hex("#292e42"),
+    .bg_color = Tui.color_from_hex("#1a1b26"),
     .fg_color = Tui.color_from_hex("#9ece6a"),
 };
 const wrong_style = Tui.Style{
-    .bg_color = Tui.color_from_hex("#292e42"),
+    .bg_color = Tui.color_from_hex("#1a1b26"),
     .fg_color = Tui.color_from_hex("#f7768e"),
+};
+const warning_style = Tui.Style{
+    .bg_color = Tui.color_from_hex("#1a1b26"),
+    .fg_color = Tui.color_from_hex("#e0af68"),
+    .mode = 2,
 };
 
 pub fn init() !void {
@@ -164,10 +176,15 @@ fn calculate_result() !void {
     try update_result_text();
 }
 
-fn draw(ctx: *anyopaque, t: *Tui) !void {
+fn draw(ctx: *anyopaque, screen: *Tui.Screen) !void {
     _ = ctx;
 
-    try root.view().draw(t);
+    for (0..screen.size.height) |y| {
+        screen.drawNTimes(0, y, " ", upcoming_style, screen.size.width);
+    }
+    try root.view().draw(screen);
+    std.debug.print("text: {s}\n", .{paragraph});
+    std.debug.print("row 3: {any}\n", .{screen.buffer[1]});
 }
 
 fn handle_key(ctx: *anyopaque, k: Tui.Key) !void {

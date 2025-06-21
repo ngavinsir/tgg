@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) !void {
         .root_module = exe_mod,
     });
 
+    b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
 
     // This allows the user to pass arguments to the application in the build
