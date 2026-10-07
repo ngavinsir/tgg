@@ -2,7 +2,6 @@ const std = @import("std");
 const Tui = @import("./tui/Tui.zig");
 const p = @import("paragraph.zig");
 const Tgg = @This();
-const io = std.Options.debug_io;
 
 var rect: Tui.Rect = .{};
 var result_text_buff: [32]u8 = undefined;
@@ -11,6 +10,7 @@ var paragraph: [][]const u8 = &[_][]const u8{};
 var spans: [128]Tui.Text.Span = undefined;
 var word_states: [128]WordState = undefined;
 var cursor: u7 = 0;
+var app_io: std.Io = undefined;
 var timer: ?std.Io.Timestamp = null;
 var wpm: ?u9 = null;
 var acc: ?u9 = null;
@@ -58,8 +58,9 @@ const wrong_style = Tui.Style{
     .fg_color = Tui.color_from_hex("#f7768e"),
 };
 
-pub fn init() !void {
-    paragraph = p.get_paragraph(10);
+pub fn init(io: std.Io) !void {
+    app_io = io;
+    paragraph = p.get_paragraph(app_io, 10);
     cursor = 0;
     text_input.clear();
     for (paragraph, 0..) |word, i| {
@@ -157,7 +158,7 @@ fn get_total_correct_chars() f64 {
 
 fn calculate_result() !void {
     std.debug.assert(timer != null);
-    const elapsed_ns: f64 = @floatFromInt(timer.?.durationTo(std.Io.Clock.awake.now(io)).nanoseconds);
+    const elapsed_ns: f64 = @floatFromInt(timer.?.durationTo(std.Io.Clock.awake.now(app_io)).nanoseconds);
     const ns_per_min: f64 = @floatFromInt(std.time.ns_per_min);
     const elapsed_min = elapsed_ns / ns_per_min;
     wpm = @intFromFloat(get_total_correct_chars() / 5 / elapsed_min);
@@ -174,7 +175,7 @@ fn draw(ctx: *anyopaque, t: *Tui) !void {
 fn handle_key(ctx: *anyopaque, k: Tui.Key) !void {
     _ = ctx;
     switch (k) {
-        .esc => try init(),
+        .esc => try init(app_io),
         .char => |c| {
             var inputted_text = text_input.text[0..text_input.text_len];
 
@@ -198,7 +199,7 @@ fn handle_key(ctx: *anyopaque, k: Tui.Key) !void {
             }
 
             // record the starting timestamp
-            if (cursor == 0 and inputted_text.len == 0) timer = std.Io.Clock.awake.now(io);
+            if (cursor == 0 and inputted_text.len == 0) timer = std.Io.Clock.awake.now(app_io);
 
             try root.view().handle_key(k);
             inputted_text = text_input.text[0..text_input.text_len];

@@ -1,6 +1,5 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const io = std.Options.debug_io;
 
 pub fn Queue(comptime T: type, comptime len: usize) type {
     if (len <= 0 or (len & (len - 1)) != 0) {
@@ -8,6 +7,7 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
     }
 
     return struct {
+        io: std.Io,
         q: [len]T = undefined,
         push_index: usize = 0,
         pop_index: usize = 0,
@@ -16,6 +16,10 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
 
         const Self = @This();
         const mod_mask = len - 1;
+
+        pub fn init(io: std.Io) Self {
+            return .{ .io = io };
+        }
 
         fn _is_full(self: *Self) bool {
             const current_size = self.push_index - self.pop_index;
@@ -28,15 +32,15 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
         }
 
         pub fn is_full(self: *Self) bool {
-            self.mutex.lockUncancelable(io);
-            defer self.mutex.unlock(io);
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             return self._is_full();
         }
 
         pub fn is_empty(self: *Self) bool {
-            self.mutex.lockUncancelable(io);
-            defer self.mutex.unlock(io);
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             return self._is_empty();
         }
@@ -44,8 +48,8 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
         pub fn push(self: *Self, x: T) !void {
             assert(self.push_index >= self.pop_index);
 
-            self.mutex.lockUncancelable(io);
-            defer self.mutex.unlock(io);
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             if (self._is_full()) {
                 return error.FullQueueError;
@@ -54,7 +58,7 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
             self.q[self.push_index & mod_mask] = x;
             self.push_index += 1;
 
-            self.cond.signal(io);
+            self.cond.signal(self.io);
         }
 
         pub fn try_push(self: *Self, x: T) void {
@@ -64,11 +68,11 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
         pub fn pop(self: *Self) ?T {
             assert(self.push_index >= self.pop_index);
 
-            self.mutex.lockUncancelable(io);
-            defer self.mutex.unlock(io);
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             while (self._is_empty()) {
-                self.cond.waitUncancelable(io, &self.mutex);
+                self.cond.waitUncancelable(self.io, &self.mutex);
             }
 
             const x = self.q[self.pop_index & mod_mask];
@@ -80,7 +84,7 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
 
 const testing = std.testing;
 test "Queue: simple push / pop" {
-    var queue: Queue(u8, 16) = .{};
+    var queue: Queue(u8, 16) = .init(testing.io);
     try queue.push(1);
     try queue.push(2);
     const pop = queue.pop();
@@ -90,19 +94,26 @@ test "Queue: simple push / pop" {
 
 const Thread = std.Thread;
 const thread_cfg = Thread.SpawnConfig{ .allocator = testing.allocator };
-test "Queue rejects pushes while full and accepts them after a pop" {
-    var queue: Queue(u8, 2) = .{};
+fn pop_once(q: *Queue(u8, 2)) void {
+    _ = q.pop();
+}
+
+test "Fill, wait to push, pop once in another thread" {
+    var queue: Queue(u8, 2) = .init(testing.io);
     try queue.push(1);
     try queue.push(2);
     try testing.expectError(error.FullQueueError, queue.push(3));
-    try testing.expectEqual(1, queue.pop());
+
+    const thread = try Thread.spawn(thread_cfg, pop_once, .{&queue});
+    thread.join();
+
     try queue.push(3);
     try testing.expectEqual(2, queue.pop());
     try testing.expectEqual(3, queue.pop());
 }
 
 fn sleep(nanoseconds: u64) void {
-    std.Io.sleep(io, .{ .nanoseconds = nanoseconds }, .awake) catch unreachable;
+    std.Io.sleep(testing.io, .{ .nanoseconds = nanoseconds }, .awake) catch unreachable;
 }
 
 fn sleepy_pop(q: *Queue(u8, 2)) !void {
@@ -144,11 +155,11 @@ test "Fill, block, fill, block" {
     // that too (after some time) then drain the queue. This test
     // fails if the while loop in `push` is turned into an `if`.
 
-    var queue: Queue(u8, 2) = .{};
+    var queue: Queue(u8, 2) = .init(testing.io);
     const thread = try Thread.spawn(thread_cfg, sleepy_pop, .{&queue});
     try queue.push(1);
     try queue.push(2);
-    const now = std.Io.Clock.awake.now(io).nanoseconds;
+    const now = std.Io.Clock.awake.now(testing.io).nanoseconds;
     while (true) {
         if (queue.push(3)) |_| {
             break;
@@ -156,7 +167,7 @@ test "Fill, block, fill, block" {
             sleep(50 * std.time.ns_per_ms);
         }
     }
-    const then = std.Io.Clock.awake.now(io).nanoseconds;
+    const then = std.Io.Clock.awake.now(testing.io).nanoseconds;
 
     // Just to make sure the sleeps are yielding to this thread, make
     // sure it took at least 900ms to do the push.

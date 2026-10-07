@@ -3,13 +3,13 @@ const mem = std.mem;
 const posix = std.posix;
 const builtin = @import("builtin");
 const Queue = @import("../Queue.zig").Queue;
-const io = std.Options.debug_io;
 
 const Tui = @This();
 pub const Flex = @import("Flex.zig");
 pub const Text = @import("Text.zig");
 pub const TextInput = @import("TextInput.zig").TextInput;
 
+io: std.Io,
 term_size: Size = undefined,
 cooked_termios: posix.termios = undefined,
 uncooked_termios: posix.termios = undefined,
@@ -17,25 +17,27 @@ tty: std.Io.File = undefined,
 writer: std.Io.File.Writer = undefined,
 writer_buffer: [0]u8 = .{},
 thread: ?std.Thread = null,
-queue: Queue(Key, 16) = .{},
+queue: Queue(Key, 16) = undefined,
 is_reading: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 
 var initialized = false;
 var tui: Tui = undefined;
 
-pub fn init() !Tui {
+pub fn init(io: std.Io) !Tui {
     if (initialized) {
         return tui;
     }
 
     initialized = true;
     tui = .{
+        .io = io,
+        .queue = Queue(Key, 16).init(io),
         .tty = .{
             .handle = try posix.openat(posix.AT.FDCWD, "/dev/tty", .{ .ACCMODE = .RDWR }, 0),
             .flags = .{ .nonblocking = false },
         },
     };
-    tui.writer = std.Io.File.writerStreaming(tui.tty, io, &tui.writer_buffer);
+    tui.writer = std.Io.File.writerStreaming(tui.tty, tui.io, &tui.writer_buffer);
 
     try tui.uncook();
     tui.term_size = try tui.getSize();
@@ -60,7 +62,7 @@ pub fn deinit(self: *Tui) void {
 
     self.cook() catch {};
     if (builtin.os.tag != .macos) { // closing /dev/tty may block indefinitely on macos
-        self.tty.close(io);
+        self.tty.close(self.io);
     }
 }
 
@@ -321,8 +323,8 @@ pub const App = struct {
     root: View,
     cur_focused: ?View = null,
 
-    pub fn init(root: View) !App {
-        _ = try Tui.init();
+    pub fn init(io: std.Io, root: View) !App {
+        _ = try Tui.init(io);
 
         try tui.start_reading();
         try tui.move_cursor(0, 0);
