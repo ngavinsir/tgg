@@ -51,7 +51,7 @@ fn draw(ctx: *anyopaque, t: *Tui) !void {
         y += 0;
     }
     if (x < t.term_size.width) {
-        try t.anyWriter().writeByteNTimes(' ', t.term_size.width - x + 1);
+        try t.writeRepeated(' ', t.term_size.width - x + 1);
     }
     try t.reset_style();
 }

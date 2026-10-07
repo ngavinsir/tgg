@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn shuffle_words() void {
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.nanoTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(std.Io.Clock.awake.now(std.Options.debug_io).nanoseconds));
     const rng = prng.random();
 
     // Fisher-Yates Shuffle

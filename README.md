@@ -12,3 +12,7 @@ calculation:
 
 - wpm: total number of correct characters (including spaces) divided by 5, then divided by elapsed minutes
 - acc: total number of correct characters (including spaces) divided by total number of characters
+
+## Development
+
+Zig 0.17.0 is pinned in `mise.toml`. Install it with `mise install`, then use `zig build`, `zig build test`, or `zig build all`.

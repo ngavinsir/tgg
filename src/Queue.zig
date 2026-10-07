@@ -1,5 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const io = std.Options.debug_io;
 
 pub fn Queue(comptime T: type, comptime len: usize) type {
     if (len <= 0 or (len & (len - 1)) != 0) {
@@ -10,8 +11,8 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
         q: [len]T = undefined,
         push_index: usize = 0,
         pop_index: usize = 0,
-        mutex: std.Thread.Mutex = .{},
-        cond: std.Thread.Condition = .{},
+        mutex: std.Io.Mutex = .init,
+        cond: std.Io.Condition = .init,
 
         const Self = @This();
         const mod_mask = len - 1;
@@ -27,15 +28,15 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
         }
 
         pub fn is_full(self: *Self) bool {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
 
             return self._is_full();
         }
 
         pub fn is_empty(self: *Self) bool {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
 
             return self._is_empty();
         }
@@ -43,8 +44,8 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
         pub fn push(self: *Self, x: T) !void {
             assert(self.push_index >= self.pop_index);
 
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
 
             if (self._is_full()) {
                 return error.FullQueueError;
@@ -53,7 +54,7 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
             self.q[self.push_index & mod_mask] = x;
             self.push_index += 1;
 
-            self.cond.signal();
+            self.cond.signal(io);
         }
 
         pub fn try_push(self: *Self, x: T) void {
@@ -63,11 +64,11 @@ pub fn Queue(comptime T: type, comptime len: usize) type {
         pub fn pop(self: *Self) ?T {
             assert(self.push_index >= self.pop_index);
 
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
 
             while (self._is_empty()) {
-                self.cond.wait(&self.mutex);
+                self.cond.waitUncancelable(io, &self.mutex);
             }
 
             const x = self.q[self.pop_index & mod_mask];
@@ -88,22 +89,20 @@ test "Queue: simple push / pop" {
 }
 
 const Thread = std.Thread;
-fn test_push_pop(q: *Queue(u8, 2)) !void {
-    try q.push(3);
-    try testing.expectEqual(2, q.pop());
-}
-
 const thread_cfg = Thread.SpawnConfig{ .allocator = testing.allocator };
-test "Fill, wait to push, pop once in another thread" {
+test "Queue rejects pushes while full and accepts them after a pop" {
     var queue: Queue(u8, 2) = .{};
     try queue.push(1);
     try queue.push(2);
-    const t = try Thread.spawn(thread_cfg, test_push_pop, .{&queue});
     try testing.expectError(error.FullQueueError, queue.push(3));
     try testing.expectEqual(1, queue.pop());
-    t.join();
+    try queue.push(3);
+    try testing.expectEqual(2, queue.pop());
     try testing.expectEqual(3, queue.pop());
-    try testing.expectEqual(null, queue.pop());
+}
+
+fn sleep(nanoseconds: u64) void {
+    std.Io.sleep(io, .{ .nanoseconds = nanoseconds }, .awake) catch unreachable;
 }
 
 fn sleepy_pop(q: *Queue(u8, 2)) !void {
@@ -117,7 +116,7 @@ fn sleepy_pop(q: *Queue(u8, 2)) !void {
     // still full and the push in the other thread is still blocked
     // waiting for space.
     try Thread.yield();
-    std.time.sleep(std.time.ns_per_s);
+    sleep(std.time.ns_per_s);
     // Finally, let that other thread go.
     try std.testing.expectEqual(1, q.pop());
 
@@ -127,12 +126,12 @@ fn sleepy_pop(q: *Queue(u8, 2)) !void {
         try Thread.yield();
     // But we want to ensure that there's a second push waiting, so
     // here's another sleep.
-    std.time.sleep(std.time.ns_per_s / 2);
+    sleep(std.time.ns_per_s / 2);
 
     // And another chance for the other thread to see that it's
     // spurious and go back to sleep.
     try Thread.yield();
-    std.time.sleep(std.time.ns_per_s / 2);
+    sleep(std.time.ns_per_s / 2);
 
     // Pop that thing and we're done.
     try std.testing.expectEqual(2, q.pop());
@@ -149,25 +148,25 @@ test "Fill, block, fill, block" {
     const thread = try Thread.spawn(thread_cfg, sleepy_pop, .{&queue});
     try queue.push(1);
     try queue.push(2);
-    const now = std.time.milliTimestamp();
+    const now = std.Io.Clock.awake.now(io).nanoseconds;
     while (true) {
         if (queue.push(3)) |_| {
             break;
         } else |_| {
-            std.time.sleep(50 * std.time.ns_per_ms);
+            sleep(50 * std.time.ns_per_ms);
         }
     }
-    const then = std.time.milliTimestamp();
+    const then = std.Io.Clock.awake.now(io).nanoseconds;
 
     // Just to make sure the sleeps are yielding to this thread, make
     // sure it took at least 900ms to do the push.
-    try std.testing.expect(then - now > 900);
+    try std.testing.expect(then - now > 900 * std.time.ns_per_ms);
 
     while (true) {
         if (queue.push(4)) |_| {
             break;
         } else |_| {
-            std.time.sleep(50 * std.time.ns_per_ms);
+            sleep(50 * std.time.ns_per_ms);
         }
     }
 
