@@ -9,26 +9,35 @@ pub const Flex = @import("Flex.zig");
 pub const Text = @import("Text.zig");
 pub const TextInput = @import("TextInput.zig").TextInput;
 
+io: std.Io,
 term_size: Size = undefined,
 cooked_termios: posix.termios = undefined,
 uncooked_termios: posix.termios = undefined,
-tty: posix.fd_t = undefined,
+tty: std.Io.File = undefined,
+writer: std.Io.File.Writer = undefined,
+writer_buffer: [0]u8 = .{},
 thread: ?std.Thread = null,
-queue: Queue(Key, 16) = .{},
+queue: Queue(Key, 16) = undefined,
 is_reading: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 
 var initialized = false;
 var tui: Tui = undefined;
 
-pub fn init() !Tui {
+pub fn init(io: std.Io) !Tui {
     if (initialized) {
         return tui;
     }
 
     initialized = true;
     tui = .{
-        .tty = try posix.open("/dev/tty", .{ .ACCMODE = .RDWR }, 0),
+        .io = io,
+        .queue = Queue(Key, 16).init(io),
+        .tty = .{
+            .handle = try posix.openat(posix.AT.FDCWD, "/dev/tty", .{ .ACCMODE = .RDWR }, 0),
+            .flags = .{ .nonblocking = false },
+        },
     };
+    tui.writer = std.Io.File.writerStreaming(tui.tty, tui.io, &tui.writer_buffer);
 
     try tui.uncook();
     tui.term_size = try tui.getSize();
@@ -53,7 +62,7 @@ pub fn deinit(self: *Tui) void {
 
     self.cook() catch {};
     if (builtin.os.tag != .macos) { // closing /dev/tty may block indefinitely on macos
-        posix.close(self.tty);
+        self.tty.close(self.io);
     }
 }
 
@@ -102,55 +111,54 @@ fn read_loop(self: *Tui) void {
     }
 }
 
-pub fn opaque_write(ptr: *const anyopaque, bytes: []const u8) !usize {
-    const self: *const Tui = @ptrCast(@alignCast(ptr));
-    return posix.write(self.tty, bytes);
+pub fn anyWriter(self: *Tui) *std.Io.Writer {
+    return &self.writer.interface;
 }
 
-pub fn anyWriter(self: *const Tui) std.io.AnyWriter {
-    return .{
-        .context = self,
-        .writeFn = Tui.opaque_write,
-    };
-}
-
-pub fn bufferedWriter(self: Tui) std.io.BufferedWriter(4096, std.io.AnyWriter) {
-    return std.io.bufferedWriter(self.anyWriter());
+pub fn writeRepeated(self: *Tui, byte: u8, count: usize) !void {
+    var buffer: [128]u8 = undefined;
+    @memset(&buffer, byte);
+    var remaining = count;
+    while (remaining > 0) {
+        const chunk_len = @min(remaining, buffer.len);
+        try self.anyWriter().writeAll(buffer[0..chunk_len]);
+        remaining -= chunk_len;
+    }
 }
 
 pub fn read(self: Tui, buf: []u8) !usize {
-    return posix.read(self.tty, buf);
+    return posix.read(self.tty.handle, buf);
 }
 
-pub fn move_cursor(self: Tui, x: usize, y: usize) !void {
-    _ = try self.anyWriter().print("\x1B[{};{}H", .{ y + 1, x + 1 });
+pub fn move_cursor(self: *Tui, x: usize, y: usize) !void {
+    try self.anyWriter().print("\x1B[{};{}H", .{ y + 1, x + 1 });
 }
 
-fn enter_alt(self: Tui) !void {
+fn enter_alt(self: *Tui) !void {
     try self.anyWriter().writeAll("\x1B[s"); // Save cursor position.
     try self.anyWriter().writeAll("\x1B[?47h"); // Save screen.
     try self.anyWriter().writeAll("\x1B[?1049h"); // Enable alternative buffer.
 }
 
-fn leave_alt(self: Tui) !void {
+fn leave_alt(self: *Tui) !void {
     try self.anyWriter().writeAll("\x1B[?1049l"); // Disable alternative buffer.
     try self.anyWriter().writeAll("\x1B[?47l"); // Restore screen.
     try self.anyWriter().writeAll("\x1B[u"); // Restore cursor position.
 }
 
-fn hide_cursor(self: Tui) !void {
+fn hide_cursor(self: *Tui) !void {
     try self.anyWriter().writeAll("\x1B[?25l");
 }
 
-fn show_cursor(self: Tui) !void {
+fn show_cursor(self: *Tui) !void {
     try self.anyWriter().writeAll("\x1B[?25h");
 }
 
-pub fn reset_style(self: Tui) !void {
+pub fn reset_style(self: *Tui) !void {
     try self.anyWriter().writeAll("\x1B[0m");
 }
 
-pub fn set_style(self: Tui, style: Style) !void {
+pub fn set_style(self: *Tui, style: Style) !void {
     var buf: [32]u8 = undefined;
     const mode_query = try std.fmt.bufPrint(&buf, "\x1B[{}m", .{style.mode});
     const bg_query = try std.fmt.bufPrint(
@@ -176,16 +184,16 @@ pub fn set_style(self: Tui, style: Style) !void {
     try self.anyWriter().writeAll(fg_query);
 }
 
-fn clear(self: Tui) !void {
+fn clear(self: *Tui) !void {
     try self.anyWriter().writeAll("\x1B[2J");
 }
 
-fn handleSigWinch(_: c_int) callconv(.C) void {
+fn handleSigWinch(_: posix.SIG) callconv(.c) void {
     tui.term_size = tui.getSize() catch return;
 }
 
 fn uncook(self: *Tui) !void {
-    self.cooked_termios = try posix.tcgetattr(self.tty);
+    self.cooked_termios = try posix.tcgetattr(self.tty.handle);
     errdefer self.cook() catch {};
 
     self.uncooked_termios = self.cooked_termios;
@@ -210,28 +218,28 @@ fn uncook(self: *Tui) !void {
     self.uncooked_termios.cflag.CSIZE = .CS8;
     self.uncooked_termios.cflag.PARENB = false;
 
-    self.uncooked_termios.cc[@intFromEnum(posix.V.TIME)] = 0;
-    self.uncooked_termios.cc[@intFromEnum(posix.V.MIN)] = 1;
-    try posix.tcsetattr(self.tty, .FLUSH, self.uncooked_termios);
+    self.uncooked_termios.cc[@backingInt(posix.V.TIME)] = 0;
+    self.uncooked_termios.cc[@backingInt(posix.V.MIN)] = 1;
+    try posix.tcsetattr(self.tty.handle, .FLUSH, self.uncooked_termios);
 
     // try self.hideCursor();
     try self.enter_alt();
     try self.clear();
 }
 
-fn cook(self: Tui) !void {
+fn cook(self: *Tui) !void {
     try self.clear();
     try self.leave_alt();
     try self.show_cursor();
     try self.reset_style();
-    try posix.tcsetattr(self.tty, .FLUSH, self.cooked_termios);
+    try posix.tcsetattr(self.tty.handle, .FLUSH, self.cooked_termios);
 }
 
 const Size = struct { width: u16, height: u16 };
 
 fn getSize(self: Tui) !Size {
     var win_size = mem.zeroes(posix.winsize);
-    const err = posix.system.ioctl(self.tty, posix.T.IOCGWINSZ, @intFromPtr(&win_size));
+    const err = posix.system.ioctl(self.tty.handle, posix.T.IOCGWINSZ, @intFromPtr(&win_size));
     if (posix.errno(err) != .SUCCESS) {
         return error.IoctlError;
     }
@@ -315,8 +323,8 @@ pub const App = struct {
     root: View,
     cur_focused: ?View = null,
 
-    pub fn init(root: View) !App {
-        _ = try Tui.init();
+    pub fn init(io: std.Io, root: View) !App {
+        _ = try Tui.init(io);
 
         try tui.start_reading();
         try tui.move_cursor(0, 0);
@@ -337,11 +345,20 @@ pub const App = struct {
         self.cur_focused = new_focused;
     }
 
-    pub fn run(self: *App) !void {
-        self.focus(self.root);
+    fn draw(self: *App) !void {
+        // DEC synchronized output keeps each rendered frame atomic.
+        try tui.anyWriter().writeAll("\x1B[?2026h");
+        errdefer tui.anyWriter().writeAll("\x1B[?2026l") catch {};
+
         try tui.hide_cursor();
         try self.root.draw(&tui);
         try tui.show_cursor();
+        try tui.anyWriter().writeAll("\x1B[?2026l");
+    }
+
+    pub fn run(self: *App) !void {
+        self.focus(self.root);
+        try self.draw();
 
         while (true) {
             if (tui.poll_key()) |k| {
@@ -351,9 +368,7 @@ pub const App = struct {
                     else => try self.root.handle_key(k),
                 }
 
-                try tui.hide_cursor();
-                try self.root.draw(&tui);
-                try tui.show_cursor();
+                try self.draw();
             }
         }
     }

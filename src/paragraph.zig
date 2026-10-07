@@ -1,7 +1,7 @@
 const std = @import("std");
 
-pub fn shuffle_words() void {
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.nanoTimestamp()));
+pub fn shuffle_words(io: std.Io) void {
+    var prng = std.Random.DefaultPrng.init(@intCast(std.Io.Clock.awake.now(io).nanoseconds));
     const rng = prng.random();
 
     // Fisher-Yates Shuffle
@@ -14,8 +14,8 @@ pub fn shuffle_words() void {
     }
 }
 
-pub fn get_paragraph(n: usize) [][]const u8 {
-    shuffle_words();
+pub fn get_paragraph(io: std.Io, n: usize) [][]const u8 {
+    shuffle_words(io);
     return words[0..n];
 }
 

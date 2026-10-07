@@ -48,7 +48,7 @@ pub fn TextInput(comptime max_text_len: u8) type {
 
             try tui.move_cursor(self.rect.x, self.rect.y);
             try tui.anyWriter().writeAll(&self.text);
-            try tui.anyWriter().writeByteNTimes(' ', tui.term_size.width - self.text.len);
+            try tui.writeRepeated(' ', tui.term_size.width - self.text.len);
             try tui.move_cursor(self.cursor, self.rect.y);
         }
 

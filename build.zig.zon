@@ -2,7 +2,7 @@
     .name = .tgg,
     .version = "0.0.1",
     .fingerprint = 0x55d3100535621b37,
-    .minimum_zig_version = "0.15.0-dev.558+9279ff888",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",
